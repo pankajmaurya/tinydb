@@ -18,7 +18,6 @@
 
 // File naming constants
 #define HEAP_FILE_NAME "heap.dat"
-#define INDEX_FILE_NAME "index.dat"
 #define SSTABLE_PREFIX "sstable_"
 #define SSTABLE_INDEX_PREFIX "sstable_index_"
 
@@ -66,7 +65,6 @@ typedef struct SSTable {
 typedef struct {
     char* data_directory;
     FILE* heap_file;
-    FILE* index_file;
 	MemtableIndex* memtable_index;  // In-memory index for heap file
     SSTable* sstables;
     long heap_size;

@@ -45,29 +45,8 @@ void free_entry(DataEntry* record) {
     }
 }
 
-void debug_all_entries(char* key) {
-    if (!kvstore->index_file) return;
-    
-    printf("[DEBUG] All entries for key '%s':\n", key);
-    fseek(kvstore->index_file, 0, SEEK_SET);
-    
-    while (!feof(kvstore->index_file)) {
-        DataEntry* entry = read_index_entry_from_file(kvstore->index_file);
-        if (!entry) break;
-        
-        if (strcmp(entry->key, key) == 0) {
-            printf("[DEBUG]   Found at position %d\n", entry->position);
-        } else {
-            printf("[DEBUG]   NOT Found at position %d\n", entry->position);
-		}
-
-        free_entry(entry);
-    }
-}
-
 // Find key in index file
 int find_key_in_index(FILE* index_file, char* key) {
-	// debug_all_entries(key);
     if (!index_file) return -1;
     
     fseek(index_file, 0, SEEK_SET);
@@ -76,8 +55,6 @@ int find_key_in_index(FILE* index_file, char* key) {
     while (!feof(index_file)) {
         DataEntry* index_entry = read_index_entry_from_file(index_file);
         if (!index_entry) break;
-		// printf("[DEBUG] Fetched Data Entry - key: %s, pos: %d\n",
-			// index_entry->key, index_entry->position);
         
         if (strcmp(index_entry->key, key) == 0) {
             last_position = index_entry->position;
