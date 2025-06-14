@@ -19,6 +19,151 @@ long get_heap_size() {
     return size;
 }
 
+// Comparison function that considers both key and original order
+int compare_records_stable(const void* a, const void* b) {
+    DataRecord* record_a = *(DataRecord**)a;
+    DataRecord* record_b = *(DataRecord**)b;
+    
+    int key_cmp = strcmp(record_a->key, record_b->key);
+    if (key_cmp != 0) {
+        return key_cmp;  // Different keys, sort by key
+    }
+    
+    // Same key: sort by original order (newer records should come later)
+    // We'll use the original_index field to maintain chronological order
+    return record_a->original_index - record_b->original_index;
+}
+
+// Compaction worker thread
+void* compaction_worker_stable_sort(void* arg) {
+    pthread_mutex_lock(&kvstore->store_mutex);
+    
+    // Close current files
+    if (kvstore->heap_file) {
+        fclose(kvstore->heap_file);
+        kvstore->heap_file = NULL;
+    }
+    if (kvstore->index_file) {
+        fclose(kvstore->index_file);
+        kvstore->index_file = NULL;
+    }
+    
+    // Create SSTable filename with timestamp
+    static int sstable_counter = 0;
+    char sstable_filename[256];
+    char sstable_index_filename[256];
+    
+    sprintf(sstable_filename, "%s/%s%d.dat", kvstore->data_directory, SSTABLE_PREFIX, sstable_counter);
+    sprintf(sstable_index_filename, "%s/%s%d.dat", kvstore->data_directory, SSTABLE_INDEX_PREFIX, sstable_counter);
+    sstable_counter++;
+    
+    // Read all records from heap file
+    char heap_path[256];
+    sprintf(heap_path, "%s/%s", kvstore->data_directory, HEAP_FILE_NAME);
+    
+    FILE* old_heap = fopen(heap_path, "rb");
+    DataRecord** records = NULL;
+    int record_count = 0;
+    int capacity = 100;
+    
+    if (old_heap) {
+        records = malloc(capacity * sizeof(DataRecord*));
+        
+        int original_index = 0;  // Track original order
+        while (!feof(old_heap)) {
+            long pos = ftell(old_heap);
+            DataRecord* record = read_record_from_file(old_heap, pos);
+            if (!record) break;
+            
+            // Store original order to maintain chronological sequence
+            record->original_index = original_index++;
+            
+            if (record_count >= capacity) {
+                capacity *= 2;
+                records = realloc(records, capacity * sizeof(DataRecord*));
+            }
+            
+            records[record_count++] = record;
+        }
+        fclose(old_heap);
+        
+        // Sort records by key, maintaining chronological order for same keys
+        qsort(records, record_count, sizeof(DataRecord*), compare_records_stable);
+        
+        // Write sorted SSTable and index
+        FILE* sstable_file = fopen(sstable_filename, "wb");
+        FILE* sstable_index_file = fopen(sstable_index_filename, "wb");
+        
+        if (sstable_file && sstable_index_file) {
+            // Remove duplicates, keeping the latest entry (highest original_index)
+            DataRecord** unique_records = malloc(record_count * sizeof(DataRecord*));
+            int unique_count = 0;
+            
+            for (int i = 0; i < record_count; i++) {
+                // Check if this is the last occurrence of this key
+                int is_latest = 1;
+                for (int j = i + 1; j < record_count; j++) {
+                    if (strcmp(records[i]->key, records[j]->key) == 0) {
+                        is_latest = 0;  // Found a later occurrence
+                        break;
+                    }
+                }
+                
+                if (is_latest) {
+                    unique_records[unique_count++] = records[i];
+                }
+            }
+            
+            // Write unique records to SSTable
+            for (int i = 0; i < unique_count; i++) {
+                long pos = ftell(sstable_file);
+                unique_records[i]->position = pos;
+                write_record_to_file(sstable_file, unique_records[i]);
+                write_index_entry_to_file(sstable_index_file, unique_records[i]);
+            }
+            
+            free(unique_records);
+        }
+        
+        if (sstable_file) fclose(sstable_file);
+        if (sstable_index_file) fclose(sstable_index_file);
+        
+        // Add new SSTable to list
+        SSTable* new_sstable = malloc(sizeof(SSTable));
+        new_sstable->filename = strdup(sstable_filename);
+        new_sstable->index_filename = strdup(sstable_index_filename);
+        new_sstable->record_count = record_count;  // Keep original record_count
+        new_sstable->next = kvstore->sstables;
+        kvstore->sstables = new_sstable;
+        
+        // Cleanup
+        for (int i = 0; i < record_count; i++) {
+            free_record(records[i]);
+        }
+        free(records);
+    }
+    
+    // Create new heap and index files
+    sprintf(heap_path, "%s/%s", kvstore->data_directory, HEAP_FILE_NAME);
+    char index_path[256];
+    sprintf(index_path, "%s/%s", kvstore->data_directory, INDEX_FILE_NAME);
+    
+    // Truncate the heap file and index file
+    kvstore->heap_file = fopen(heap_path, "wb");
+    kvstore->index_file = fopen(index_path, "wb");
+    fclose(kvstore->heap_file);
+    fclose(kvstore->index_file);
+    kvstore->heap_size = 0;
+
+    // Reopen in append mode for future writes
+    kvstore->heap_file = fopen(heap_path, "a+b");
+    kvstore->index_file = fopen(index_path, "a+b");
+    
+    kvstore->compaction_status = COMPACTION_COMPLETED;
+    pthread_mutex_unlock(&kvstore->store_mutex);
+    
+    return NULL;
+}
 // Compaction worker thread
 void* compaction_worker(void* arg) {
     pthread_mutex_lock(&kvstore->store_mutex);
@@ -370,7 +515,7 @@ void compact() {
     if (!kvstore || kvstore->compaction_status == COMPACTION_STARTED) return;
     
     kvstore->compaction_status = COMPACTION_STARTED;
-    pthread_create(&kvstore->compaction_thread, NULL, compaction_worker, NULL);
+    pthread_create(&kvstore->compaction_thread, NULL, compaction_worker_stable_sort, NULL);
     pthread_detach(kvstore->compaction_thread);
 }
 

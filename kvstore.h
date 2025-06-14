@@ -29,6 +29,8 @@ typedef struct {
     char* key;
     char* value;  // NULL for tombstone
     int position; // Position in heap file (for index entries)
+	int original_index;  // Useful during sorting, not to be persisted
+
 } DataRecord;
 
 // Data Entry structure for in-memory operations
