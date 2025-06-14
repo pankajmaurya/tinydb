@@ -233,8 +233,8 @@ char* get(char* key) {
             DataRecord* record = read_record_from_file(kvstore->heap_file, position);
             if (record) {
                 char* result = NULL;
-                if (record->vLen > 0) {
-                    result = strdup(record->value);
+                if (record->vLen >= 0) {
+                    result = strdup(record->value ? record->value : "");
                 }
                 free_record(record);
                 pthread_mutex_unlock(&kvstore->store_mutex);

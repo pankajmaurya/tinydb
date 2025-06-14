@@ -67,7 +67,7 @@ void debug_all_entries(char* key) {
 
 // Find key in index file
 int find_key_in_index(FILE* index_file, char* key) {
-	debug_all_entries(key);
+	// debug_all_entries(key);
     if (!index_file) return -1;
     
     fseek(index_file, 0, SEEK_SET);

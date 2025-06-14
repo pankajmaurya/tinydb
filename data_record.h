@@ -36,7 +36,7 @@ DataRecord* read_record_from_file(FILE* file, int position) {
     key[kLen] = '\0';
     
     char* value = NULL;
-    if (vLen > 0) {
+    if (vLen >= 0) {
         value = malloc(vLen + 1);
         if (fread(value, sizeof(char), (size_t) vLen, file) != (size_t) vLen) {
             free(key);
@@ -57,7 +57,7 @@ void write_record_to_file(FILE* file, DataRecord* record) {
     fwrite(&record->kLen, sizeof(int), 1, file);
     fwrite(&record->vLen, sizeof(int), 1, file);
     fwrite(record->key, sizeof(char), record->kLen, file);
-    if (record->vLen > 0) {
+    if (record->vLen >= 0) {
         fwrite(record->value, sizeof(char), record->vLen, file);
     }
     fflush(file);
