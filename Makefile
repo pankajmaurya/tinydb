@@ -7,12 +7,14 @@ LDFLAGS = -lpthread
 
 # Source files
 KVSTORE_SRC = kvstore.c
+TEST_SRC = test_kvstore.c
 DEMO_SRC = demo.c
 KVDUMP_SRC = kvdump.c
 INTERPRETER_SRC = interpreter.c
 
 # Object files
 KVSTORE_OBJ = kvstore.o
+TEST_OBJ = test_kvstore.o
 DEMO_OBJ = demo.o
 KVDUMP_OBJ = kvdump.o
 INTERPRETER_OBJ = interpreter.o
@@ -21,12 +23,17 @@ INTERPRETER_OBJ = interpreter.o
 TARGET = demo
 KVDUMP_TARGET = kvdump
 INTERPRETER_TARGET = interpreter
+TEST_TARGET = test_kvstore
 
 # Header files
 HEADERS = kvstore.h utils.h sstable.h
 
 # Default target
-all: $(TARGET) $(KVDUMP_TARGET) $(INTERPRETER_TARGET)
+all: $(TARGET) $(KVDUMP_TARGET) $(INTERPRETER_TARGET) $(TEST_TARGET)
+
+# Build the automated testing tool
+$(TEST_TARGET): $(KVSTORE_OBJ) $(TEST_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
 
 # Build the demo binary
 $(TARGET): $(KVSTORE_OBJ) $(DEMO_OBJ) 
@@ -48,6 +55,10 @@ $(KVSTORE_OBJ): $(KVSTORE_SRC) $(HEADERS)
 $(INTERPRETER_OBJ): $(INTERPRETER_SRC) $(HEADERS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Build interpreter object file
+$(TEST_OBJ): $(TEST_SRC)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # Build demo object file
 $(DEMO_OBJ): $(DEMO_SRC) $(HEADERS)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -58,7 +69,7 @@ $(KVDUMP_OBJ): $(KVDUMP_SRC)
 
 # Clean up build artifacts
 clean:
-	rm -f $(KVSTORE_OBJ) $(DEMO_OBJ) $(KVDUMP_OBJ) $(INTERPRETER_OBJ) $(TARGET) $(KVDUMP_TARGET) $(INTERPRETER_TARGET)
+	rm -f $(KVSTORE_OBJ) $(DEMO_OBJ) $(KVDUMP_OBJ) $(INTERPRETER_OBJ) $(TEST_OBJ) $(TARGET) $(KVDUMP_TARGET) $(INTERPRETER_TARGET) $(TEST_TARGET)
 #	rm -rf /tmp/kvstore_data
 
 # Clean and rebuild

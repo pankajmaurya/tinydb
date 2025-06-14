@@ -84,7 +84,7 @@ int find_key_in_index(FILE* index_file, char* key) {
 			printf("DATA ENTRY MATCHES, saved position %d\n", last_position);
             // DON'T break here - continue to find more recent entries
         } else {
-			printf("DATA ENTRY MISMATCH\n");
+			// printf("DATA ENTRY MISMATCH\n");
 		}
         free_entry(index_entry);
     }
