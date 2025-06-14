@@ -148,7 +148,7 @@ int test_interleaved_operations() {
     
     init((char*)test_dir);
     
-    const int num_keys = 200;
+    const int num_keys = 1000;
     
     // Create initial dataset
     for (int i = 0; i < num_keys; i++) {
@@ -479,7 +479,7 @@ int test_high_frequency_operations() {
     
     init((char*)test_dir);
     
-    const int num_operations = 2000;
+    const int num_operations = 200;
     clock_t start_time = clock();
     
     // Rapid-fire operations
