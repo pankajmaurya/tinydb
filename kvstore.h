@@ -40,6 +40,19 @@ typedef struct {
     char* key;
 } DataEntry;
 
+// Memtable index entry for heap file
+typedef struct MemtableEntry {
+    char* key;
+    int position;           // Position in heap file
+    struct MemtableEntry* next;
+} MemtableEntry;
+
+// Hash table for memtable index
+#define MEMTABLE_HASH_SIZE 1024
+typedef struct {
+    MemtableEntry* buckets[MEMTABLE_HASH_SIZE];
+    int count;
+} MemtableIndex;
 
 // SSTable metadata
 typedef struct SSTable {
@@ -54,6 +67,7 @@ typedef struct {
     char* data_directory;
     FILE* heap_file;
     FILE* index_file;
+	MemtableIndex* memtable_index;  // In-memory index for heap file
     SSTable* sstables;
     long heap_size;
     int compaction_threshold;
@@ -76,5 +90,14 @@ int getCompactionStatus();
 
 // Cleanup function
 void cleanup();
+
+// Memtable functions
+MemtableIndex* memtable_init();
+void memtable_cleanup(MemtableIndex* memtable);
+void memtable_put(MemtableIndex* memtable, char* key, int position);
+int memtable_get(MemtableIndex* memtable, char* key);
+void memtable_delete(MemtableIndex* memtable, char* key);
+unsigned int hash_key(char* key);
+void rebuild_memtable_from_heap(KVStore* kvstore);
 
 #endif // KVSTORE_H

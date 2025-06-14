@@ -8,6 +8,29 @@
 // Global KVStore instance
 KVStore* kvstore = NULL;
 
+// Get next available SSTable ID
+int get_next_sstable_id(KVStore* kvstore) {
+    DIR* dir = opendir(kvstore->data_directory);
+    if (!dir) return 1;
+    
+    int max_id = 0;
+    struct dirent* entry;
+    
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, SSTABLE_PREFIX, strlen(SSTABLE_PREFIX)) == 0) {
+            char* id_str = entry->d_name + strlen(SSTABLE_PREFIX);
+            int id = atoi(id_str);
+            if (id > max_id) {
+                max_id = id;
+            }
+        }
+    }
+    
+    closedir(dir);
+    return max_id + 1;
+}
+
+
 // Get current heap file size
 long get_heap_size() {
     if (!kvstore->heap_file) return 0;
@@ -43,10 +66,10 @@ void* compaction_worker(void* arg) {
         fclose(kvstore->heap_file);
         kvstore->heap_file = NULL;
     }
-    if (kvstore->index_file) {
+    /*if (kvstore->index_file) {
         fclose(kvstore->index_file);
         kvstore->index_file = NULL;
-    }
+    }*/
     
     // Create SSTable filename with timestamp
     static int sstable_counter = 0;
@@ -143,19 +166,19 @@ void* compaction_worker(void* arg) {
     
     // Create new heap and index files
     sprintf(heap_path, "%s/%s", kvstore->data_directory, HEAP_FILE_NAME);
-    char index_path[256];
-    sprintf(index_path, "%s/%s", kvstore->data_directory, INDEX_FILE_NAME);
+    //char index_path[256];
+    //sprintf(index_path, "%s/%s", kvstore->data_directory, INDEX_FILE_NAME);
     
     // Truncate the heap file and index file
     kvstore->heap_file = fopen(heap_path, "wb");
-    kvstore->index_file = fopen(index_path, "wb");
+    //kvstore->index_file = fopen(index_path, "wb");
     fclose(kvstore->heap_file);
-    fclose(kvstore->index_file);
+    //fclose(kvstore->index_file);
     kvstore->heap_size = 0;
 
     // Reopen in append mode for future writes
     kvstore->heap_file = fopen(heap_path, "a+b");
-    kvstore->index_file = fopen(index_path, "a+b");
+    //kvstore->index_file = fopen(index_path, "a+b");
     
     kvstore->compaction_status = COMPACTION_COMPLETED;
     pthread_mutex_unlock(&kvstore->store_mutex);
@@ -168,7 +191,7 @@ void init(char* data_directory) {
     kvstore = malloc(sizeof(KVStore));
     kvstore->data_directory = strdup(data_directory);
     kvstore->heap_file = NULL;
-    kvstore->index_file = NULL;
+    // kvstore->index_file = NULL;
     kvstore->sstables = NULL;
     kvstore->heap_size = 0;
     kvstore->compaction_threshold = DEFAULT_COMPACTION_THRESHOLD;
@@ -180,7 +203,7 @@ void init(char* data_directory) {
     mkdir(data_directory, 0755);
     
     // Load existing SSTables
-    load_sstables(kvstore);
+    // load_sstables(kvstore);
     
     // Open or create heap and index files
     char heap_path[256];
@@ -189,16 +212,28 @@ void init(char* data_directory) {
     sprintf(index_path, "%s/%s", data_directory, INDEX_FILE_NAME);
     
     kvstore->heap_file = fopen(heap_path, "a+b");
-    kvstore->index_file = fopen(index_path, "a+b");
+    // kvstore->index_file = fopen(index_path, "a+b");
     
     if (kvstore->heap_file) {
         kvstore->heap_size = get_heap_size();
     }
+	// Initialize memtable
+    kvstore->memtable_index = memtable_init();
+    if (!kvstore->memtable_index) {
+        free(kvstore->data_directory);
+        free(kvstore);
+		return;
+    }
+	// Rebuild memtable from existing heap file
+    rebuild_memtable_from_heap(kvstore);
+
+	// Load existing SSTables
+    load_sstables(kvstore);
 }
 
 // Write a key-value pair
 void put(char* key, char* value) {
-    if (!kvstore || !kvstore->heap_file || !kvstore->index_file) return;
+    if (!kvstore || !kvstore->heap_file) return;
     
     pthread_mutex_lock(&kvstore->store_mutex);
     
@@ -206,8 +241,8 @@ void put(char* key, char* value) {
     DataRecord* record = create_record(key, value, position);
     
     write_record_to_file(kvstore->heap_file, record);
-    write_index_entry_to_file(kvstore->index_file, record);
-    
+    //write_index_entry_to_file(kvstore->index_file, record);
+    memtable_put(kvstore->memtable_index, key, (int)position);
     kvstore->heap_size = get_heap_size();
     
     // Check if compaction is needed
@@ -227,8 +262,10 @@ char* get(char* key) {
     pthread_mutex_lock(&kvstore->store_mutex);
     
     // First check heap file (most recent)
-    if (kvstore->index_file) {
-        int position = find_key_in_index(kvstore->index_file, key);
+	int position = memtable_get(kvstore->memtable_index, key);
+
+   // if (kvstore->index_file) {
+   //     int position = find_key_in_index(kvstore->index_file, key);
         if (position != -1) {
             DataRecord* record = read_record_from_file(kvstore->heap_file, position);
             if (record) {
@@ -241,7 +278,7 @@ char* get(char* key) {
                 return result;
             }
         }
-    }
+    //}
     
     // Then check SSTables (older data)
     SSTable* current = kvstore->sstables;
@@ -270,13 +307,14 @@ char* debug_get(char* key) {
     printf("[DEBUG] kvstore found, acquiring mutex\n");
     pthread_mutex_lock(&kvstore->store_mutex);
     
-    printf("[DEBUG] mutex acquired, checking heap file\n");
+    printf("[DEBUG] mutex acquired, checking memtable index\n");
+	int position = memtable_get(kvstore->memtable_index, key);
     
     // First check heap file (most recent)
-    if (kvstore->index_file) {
-        printf("[DEBUG] index_file exists, searching for key in index\n");
-        int position = find_key_in_index(kvstore->index_file, key);
-        printf("[DEBUG] find_key_in_index returned position: %d\n", position);
+    //if (kvstore->index_file) {
+    //    printf("[DEBUG] index_file exists, searching for key in index\n");
+    //    int position = find_key_in_index(kvstore->index_file, key);
+        printf("[DEBUG] memtable_get returned position: %d\n", position);
         
         if (position != -1) {
             printf("[DEBUG] key found in index at position %d, reading record from heap\n", position);
@@ -290,13 +328,14 @@ char* debug_get(char* key) {
                 printf("[DEBUG]   - value: '%s'\n", record->value ? record->value : "(null)");
                 
                 char* result = NULL;
-                if (record->vLen > 0) {
+                if (record->vLen >= 0) {
                     printf("[DEBUG] record is valid, duplicating value\n");
-                    result = strdup(record->value);
+                    // result = strdup(record->value);
+					result = strdup(record->value ? record->value : "");
                     printf("[DEBUG] strdup result: '%s'\n", result ? result : "(null)");
                 } else {
-                    if (record->vLen <= 0) {
-                        printf("[DEBUG] record has vLen <= 0, treating as tombstone\n");
+                    if (record->vLen < 0) {
+                        printf("[DEBUG] record has vLen < 0, treating as tombstone\n");
                     }
                 }
                 
@@ -308,11 +347,11 @@ char* debug_get(char* key) {
                 printf("[DEBUG] read_record_from_file returned NULL for position %d\n", position);
             }
         } else {
-            printf("[DEBUG] key not found in index\n");
+            printf("[DEBUG] key not found in memtable\n");
         }
-    } else {
-        printf("[DEBUG] index_file is NULL\n");
-    }
+    //} else {
+    //    printf("[DEBUG] index_file is NULL\n");
+    //}
     
     printf("[DEBUG] checking SSTables\n");
     
@@ -352,7 +391,7 @@ char* debug_get(char* key) {
 
 // Delete a key
 void delete(char* key) {
-    if (!kvstore || !kvstore->heap_file || !kvstore->index_file) return;
+    if (!kvstore || !kvstore->heap_file) return;
     
     pthread_mutex_lock(&kvstore->store_mutex);
     
@@ -362,10 +401,12 @@ void delete(char* key) {
     
     write_record_to_file(kvstore->heap_file, tombstone);
 	printf("[DEBUG] Written tombstone to heap file\n");
-    write_index_entry_to_file(kvstore->index_file, tombstone);
-	printf("[DEBUG] Written index entry for tombstone\n");
-	debug_all_entries(key);
+    //write_index_entry_to_file(kvstore->index_file, tombstone);
+	//printf("[DEBUG] Written index entry for tombstone\n");
+	//debug_all_entries(key);
     
+	memtable_put(kvstore->memtable_index, key, (int)position);
+
     kvstore->heap_size = get_heap_size();
     
     // Check if compaction is needed
@@ -405,10 +446,11 @@ void cleanup() {
         kvstore->heap_file = NULL;
     }
     
-    if (kvstore->index_file) {
+    /*if (kvstore->index_file) {
         fclose(kvstore->index_file);
         kvstore->index_file = NULL;
-    }
+    }*/
+	memtable_cleanup(kvstore->memtable_index);
     
     // Free SSTable list
     SSTable* current = kvstore->sstables;
@@ -425,4 +467,163 @@ void cleanup() {
     pthread_mutex_destroy(&kvstore->store_mutex);
     free(kvstore);
     kvstore = NULL;
+}
+
+// Initialize memtable index
+MemtableIndex* memtable_init() {
+    MemtableIndex* memtable = malloc(sizeof(MemtableIndex));
+    if (!memtable) return NULL;
+    
+    memset(memtable->buckets, 0, sizeof(memtable->buckets));
+    memtable->count = 0;
+    return memtable;
+}
+
+// Cleanup memtable index
+void memtable_cleanup(MemtableIndex* memtable) {
+    if (!memtable) return;
+    
+    for (int i = 0; i < MEMTABLE_HASH_SIZE; i++) {
+        MemtableEntry* entry = memtable->buckets[i];
+        while (entry) {
+            MemtableEntry* next = entry->next;
+            free(entry->key);
+            free(entry);
+            entry = next;
+        }
+    }
+    free(memtable);
+}
+
+// Hash function for keys
+unsigned int hash_key(char* key) {
+    unsigned int hash = 5381;
+    int c;
+    while ((c = *key++)) {
+        hash = ((hash << 5) + hash) + c; // hash * 33 + c
+    }
+    return hash % MEMTABLE_HASH_SIZE;
+}
+
+// Add key-position pair to memtable
+void memtable_put(MemtableIndex* memtable, char* key, int position) {
+    if (!memtable || !key) return;
+    
+    unsigned int bucket = hash_key(key);
+    MemtableEntry* entry = memtable->buckets[bucket];
+    
+    // Check if key already exists
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            entry->position = position;  // Update position
+            return;
+        }
+        entry = entry->next;
+    }
+    
+    // Create new entry
+    MemtableEntry* new_entry = malloc(sizeof(MemtableEntry));
+    if (!new_entry) return;
+    
+    new_entry->key = strdup(key);
+    new_entry->position = position;
+    new_entry->next = memtable->buckets[bucket];
+    memtable->buckets[bucket] = new_entry;
+    memtable->count++;
+}
+
+// Get position for key from memtable
+int memtable_get(MemtableIndex* memtable, char* key) {
+    if (!memtable || !key) return -1;
+    
+    unsigned int bucket = hash_key(key);
+    MemtableEntry* entry = memtable->buckets[bucket];
+    
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            return entry->position;
+        }
+        entry = entry->next;
+    }
+    
+    return -1;  // Key not found
+}
+
+// Remove key from memtable
+void memtable_delete(MemtableIndex* memtable, char* key) {
+    if (!memtable || !key) return;
+    
+    unsigned int bucket = hash_key(key);
+    MemtableEntry* entry = memtable->buckets[bucket];
+    MemtableEntry* prev = NULL;
+    
+    while (entry) {
+        if (strcmp(entry->key, key) == 0) {
+            if (prev) {
+                prev->next = entry->next;
+            } else {
+                memtable->buckets[bucket] = entry->next;
+            }
+            free(entry->key);
+            free(entry);
+            memtable->count--;
+            return;
+        }
+        prev = entry;
+        entry = entry->next;
+    }
+}
+
+// Rebuild memtable from existing heap file
+void rebuild_memtable_from_heap(KVStore* kvstore) {
+    if (!kvstore || !kvstore->heap_file) return;
+    
+    // Clear existing memtable
+    memtable_cleanup(kvstore->memtable_index);
+    kvstore->memtable_index = memtable_init();
+
+    // Read all records from heap file
+    char heap_path[256];
+    sprintf(heap_path, "%s/%s", kvstore->data_directory, HEAP_FILE_NAME);
+    
+    FILE* heap_file = fopen(heap_path, "rb");
+ 
+    // Read through heap file and rebuild index
+    // FILE* heap_file = fopen(kvstore->heap_file, "rb");
+    if (!heap_file) return;
+    
+    while (!feof(heap_file)) {
+        long position = ftell(heap_file);
+        
+        // Read key length
+        int kLen;
+        if (fread(&kLen, sizeof(int), 1, heap_file) != 1) {
+            if (feof(heap_file)) break;
+            continue;
+        }
+        
+        // Read value length
+        int vLen;
+        if (fread(&vLen, sizeof(int), 1, heap_file) != 1) break;
+        
+        // Read key
+        char* key = malloc(kLen + 1);
+        if (fread(key, sizeof(char), (size_t) kLen, heap_file) != (size_t) kLen) {
+            free(key);
+            break;
+        }
+        key[kLen] = '\0';
+        
+        // Add to memtable
+        memtable_put(kvstore->memtable_index, key, (int)position);
+        
+        // Skip value
+        if (vLen > 0) {
+            fseek(heap_file, vLen, SEEK_CUR);
+        }
+        
+        free(key);
+    }
+    
+    fclose(heap_file);
 }

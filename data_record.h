@@ -13,13 +13,6 @@ DataRecord* create_record(char* key, char* value, int position) {
     return record;
 }
 
-// Comparison function for sorting records
-int compare_records(const void* a, const void* b) {
-    DataRecord* rec_a = *(DataRecord**)a;
-    DataRecord* rec_b = *(DataRecord**)b;
-    return strcmp(rec_a->key, rec_b->key);
-}
-
 // Read a data record from file
 DataRecord* read_record_from_file(FILE* file, int position) {
     if (fseek(file, position, SEEK_SET) != 0) return NULL;

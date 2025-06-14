@@ -76,8 +76,8 @@ int find_key_in_index(FILE* index_file, char* key) {
     while (!feof(index_file)) {
         DataEntry* index_entry = read_index_entry_from_file(index_file);
         if (!index_entry) break;
-		printf("[DEBUG] Fetched Data Entry - key: %s, pos: %d\n",
-			index_entry->key, index_entry->position);
+		// printf("[DEBUG] Fetched Data Entry - key: %s, pos: %d\n",
+			// index_entry->key, index_entry->position);
         
         if (strcmp(index_entry->key, key) == 0) {
             last_position = index_entry->position;
