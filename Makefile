@@ -23,7 +23,7 @@ KVDUMP_TARGET = kvdump
 INTERPRETER_TARGET = interpreter
 
 # Header files
-HEADERS = kvstore.h
+HEADERS = kvstore.h utils.h sstable.h
 
 # Default target
 all: $(TARGET) $(KVDUMP_TARGET) $(INTERPRETER_TARGET)

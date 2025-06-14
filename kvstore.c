@@ -1,186 +1,12 @@
 #include "kvstore.h"
 #include <sys/stat.h>
 #include <sys/types.h>
+#include "utils.h"
+#include "data_record.h"
+#include "sstable.h"
 
 // Global KVStore instance
 KVStore* kvstore = NULL;
-
-// Helper function to create a data record
-DataRecord* create_record(char* key, char* value, int position) {
-    DataRecord* record = malloc(sizeof(DataRecord));
-    record->kLen = strlen(key);
-    record->vLen = value ? strlen(value) : -1;
-    record->key = strdup(key);
-    record->value = value ? strdup(value) : NULL;
-    record->position = position;
-    return record;
-}
-
-// Helper function to free a data record
-void free_record(DataRecord* record) {
-    if (record) {
-        free(record->key);
-        free(record->value);
-        free(record);
-    }
-}
-
-// Write a data record to file
-void write_record_to_file(FILE* file, DataRecord* record) {
-    fwrite(&record->kLen, sizeof(int), 1, file);
-    fwrite(&record->vLen, sizeof(int), 1, file);
-    fwrite(record->key, sizeof(char), record->kLen, file);
-    if (record->vLen > 0) {
-        fwrite(record->value, sizeof(char), record->vLen, file);
-    }
-    fflush(file);
-}
-
-// Write an index entry to file
-void write_index_entry_to_file(FILE* file, DataRecord* record) {
-    fwrite(&record->kLen, sizeof(int), 1, file);
-    fwrite(&record->position, sizeof(int), 1, file);
-    fwrite(record->key, sizeof(char), record->kLen, file);
-    fflush(file);
-}
-
-// Read a data record from file
-DataRecord* read_record_from_file(FILE* file, int position) {
-    if (fseek(file, position, SEEK_SET) != 0) return NULL;
-    
-    int kLen, vLen;
-    if (fread(&kLen, sizeof(int), 1, file) != 1) return NULL;
-    if (fread(&vLen, sizeof(int), 1, file) != 1) return NULL;
-    
-    char* key = malloc(kLen + 1);
-    if (fread(key, sizeof(char), (size_t) kLen, file) != (size_t) kLen) {
-        free(key);
-        return NULL;
-    }
-    key[kLen] = '\0';
-    
-    char* value = NULL;
-    if (vLen > 0) {
-        value = malloc(vLen + 1);
-        if (fread(value, sizeof(char), (size_t) vLen, file) != (size_t) vLen) {
-            free(key);
-            free(value);
-            return NULL;
-        }
-        value[vLen] = '\0';
-    }
-    
-    DataRecord* record = create_record(key, value, position);
-    free(key);
-    free(value);
-    return record;
-}
-
-// Read an index entry from file
-DataRecord* read_index_entry_from_file(FILE* file) {
-    int kLen, vPos;
-    if (fread(&kLen, sizeof(int), 1, file) != 1) return NULL;
-    if (fread(&vPos, sizeof(int), 1, file) != 1) return NULL;
-    
-    char* key = malloc(kLen + 1);
-    if (fread(key, sizeof(char), (size_t) kLen, file) != (size_t) kLen) {
-        free(key);
-        return NULL;
-    }
-    key[kLen] = '\0';
-    
-    DataRecord* record = create_record(key, NULL, vPos);
-    free(key);
-    return record;
-}
-
-// Find key in index file
-int find_key_in_index(FILE* index_file, char* key) {
-    if (!index_file) return -1;
-    
-    fseek(index_file, 0, SEEK_SET);
-    int last_position = -1;  // Track the LAST occurrence
-    
-    while (!feof(index_file)) {
-        DataRecord* index_entry = read_index_entry_from_file(index_file);
-        if (!index_entry) break;
-        
-        if (strcmp(index_entry->key, key) == 0) {
-            last_position = index_entry->position;
-            // DON'T break here - continue to find more recent entries
-        }
-        free_record(index_entry);
-    }
-    
-    return last_position;
-}
-
-// Search for key in SSTable
-char* search_sstable(char* sstable_file, char* index_file, char* key) {
-    FILE* idx_file = fopen(index_file, "rb");
-    if (!idx_file) return NULL;
-    
-    int position = find_key_in_index(idx_file, key);
-    fclose(idx_file);
-    
-    if (position == -1) return NULL;
-    
-    FILE* data_file = fopen(sstable_file, "rb");
-    if (!data_file) return NULL;
-    
-    DataRecord* record = read_record_from_file(data_file, position);
-    fclose(data_file);
-    
-    if (!record) return NULL;
-    
-    char* result = NULL;
-    if (record->vLen > 0) {
-        result = strdup(record->value);
-    }
-    
-    free_record(record);
-    return result;
-}
-
-// Load existing SSTables
-void load_sstables() {
-    DIR* dir = opendir(kvstore->data_directory);
-    if (!dir) return;
-    
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strncmp(entry->d_name, SSTABLE_PREFIX, strlen(SSTABLE_PREFIX)) == 0 &&
-            strstr(entry->d_name, ".dat") != NULL) {
-            
-            SSTable* sstable = malloc(sizeof(SSTable));
-            sstable->filename = malloc(strlen(kvstore->data_directory) + strlen(entry->d_name) + 2);
-            sprintf(sstable->filename, "%s/%s", kvstore->data_directory, entry->d_name);
-            
-            // Generate corresponding index filename
-            char index_name[256];
-            strcpy(index_name, entry->d_name);
-            char* dot = strrchr(index_name, '.');
-            if (dot) *dot = '\0';
-            
-            char* sstable_part = strstr(index_name, SSTABLE_PREFIX);
-            if (sstable_part) {
-                memmove(index_name + strlen(SSTABLE_INDEX_PREFIX), 
-                       sstable_part + strlen(SSTABLE_PREFIX),
-                       strlen(sstable_part + strlen(SSTABLE_PREFIX)) + 1);
-                memcpy(index_name, SSTABLE_INDEX_PREFIX, strlen(SSTABLE_INDEX_PREFIX));
-            }
-            strcat(index_name, ".dat");
-            
-            sstable->index_filename = malloc(strlen(kvstore->data_directory) + strlen(index_name) + 2);
-            sprintf(sstable->index_filename, "%s/%s", kvstore->data_directory, index_name);
-            
-            sstable->record_count = 0;
-            sstable->next = kvstore->sstables;
-            kvstore->sstables = sstable;
-        }
-    }
-    closedir(dir);
-}
 
 // Get current heap file size
 long get_heap_size() {
@@ -191,13 +17,6 @@ long get_heap_size() {
     long size = ftell(kvstore->heap_file);
     fseek(kvstore->heap_file, current_pos, SEEK_SET);
     return size;
-}
-
-// Comparison function for sorting records
-int compare_records(const void* a, const void* b) {
-    DataRecord* rec_a = *(DataRecord**)a;
-    DataRecord* rec_b = *(DataRecord**)b;
-    return strcmp(rec_a->key, rec_b->key);
 }
 
 // Compaction worker thread
@@ -310,9 +129,18 @@ void* compaction_worker(void* arg) {
     char index_path[256];
     sprintf(index_path, "%s/%s", kvstore->data_directory, INDEX_FILE_NAME);
     
+	// The bug is likely here. We needed to truncate the heap file and index file.
     kvstore->heap_file = fopen(heap_path, "wb");
     kvstore->index_file = fopen(index_path, "wb");
+	// However, just after the compaction, if we are doing a write, this is not working.
+	fclose(kvstore->heap_file);
+	fclose(kvstore->index_file);
     kvstore->heap_size = 0;
+
+	// Hence open it again in a+b mode!
+    kvstore->heap_file = fopen(heap_path, "a+b");
+    kvstore->index_file = fopen(index_path, "a+b");
+	
     
     kvstore->compaction_status = COMPACTION_COMPLETED;
     pthread_mutex_unlock(&kvstore->store_mutex);
@@ -337,7 +165,7 @@ void init(char* data_directory) {
     mkdir(data_directory, 0755);
     
     // Load existing SSTables
-    load_sstables();
+    load_sstables(kvstore);
     
     // Open or create heap and index files
     char heap_path[256];
@@ -515,20 +343,26 @@ void delete(char* key) {
     
     long position = ftell(kvstore->heap_file);
     DataRecord* tombstone = create_record(key, NULL, position);
+	printf("[DEBUG] Creating tombstone record for key %s with heap offset at position %ld\n", key, position);
     
     write_record_to_file(kvstore->heap_file, tombstone);
+	printf("[DEBUG] Written tombstone to heap file\n");
     write_index_entry_to_file(kvstore->index_file, tombstone);
+	printf("[DEBUG] Written index entry for tombstone\n");
+	debug_all_entries(key);
     
     kvstore->heap_size = get_heap_size();
     
     // Check if compaction is needed
     if (kvstore->heap_size > kvstore->compaction_threshold && 
         kvstore->compaction_status == COMPACTION_COMPLETED) {
+		printf("[DEBUG] Triggering compactiong...(heap file too big)\n");
         compact();
     }
     
     free_record(tombstone);
     pthread_mutex_unlock(&kvstore->store_mutex);
+	printf("[DEBUG] Deletion complete\n");
 }
 
 // Trigger compaction

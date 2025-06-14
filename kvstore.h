@@ -31,6 +31,14 @@ typedef struct {
     int position; // Position in heap file (for index entries)
 } DataRecord;
 
+// Data Entry structure for in-memory operations
+typedef struct {
+    int kLen;
+    int position; // Position in heap file 
+    char* key;
+} DataEntry;
+
+
 // SSTable metadata
 typedef struct SSTable {
     char* filename;
